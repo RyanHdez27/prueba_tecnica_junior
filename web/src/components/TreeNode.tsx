@@ -3,12 +3,11 @@
  *
  * Responsabilidad:
  *   - Renderizar un nodo individual del árbol contable con su código, nombre, nivel y naturaleza.
- *   - Manejar el estado local de expandido/colapsado (expand/collapse).
- *   - Renderizar recursivamente a sus hijos en `node.children` respetando la jerarquía visual.
- *   - Exponer botones de acción: eliminar cuenta (Fase 5) y crear cuenta hija (Fase 6).
+ *   - Controlar la expansión y colapso sincronizado con el árbol (Fase 6: expandir/colapsar todo y búsqueda).
+ *   - Resaltar coincidencias de búsqueda.
+ *   - Botones de acción: eliminar cuenta y crear cuenta hija desde el nodo.
  */
 
-import { useState } from 'react';
 import type { AccountNode } from '../types/account';
 
 interface TreeNodeProps {
@@ -16,45 +15,72 @@ interface TreeNodeProps {
   node: AccountNode;
   /** Nivel de profundidad en el árbol (0 para clases raíz) */
   depth?: number;
+  /** Conjunto de códigos actualmente expandidos */
+  expandedCodes: Set<string>;
+  /** Callback para alternar expansión de un nodo */
+  onToggleExpand: (code: string) => void;
   /** Callback para solicitar la eliminación de una cuenta */
   onDelete?: (node: AccountNode) => void;
   /** Callback para crear una cuenta hija desde este nodo (Fase 6) */
-  onAddChild?: (parentCode: string) => void;
+  onAddChild?: (parent: AccountNode) => void;
+  /** Término de búsqueda para resaltar */
+  searchQuery?: string;
+}
+
+/** Resalta las coincidencias del texto de búsqueda */
+function HighlightMatch({ text, query }: { text: string; query?: string }) {
+  if (!query || !query.trim()) return <>{text}</>;
+
+  const cleanQuery = query.trim().toLowerCase();
+  const index = text.toLowerCase().indexOf(cleanQuery);
+  if (index === -1) return <>{text}</>;
+
+  const before = text.substring(0, index);
+  const match = text.substring(index, index + cleanQuery.length);
+  const after = text.substring(index + cleanQuery.length);
+
+  return (
+    <>
+      {before}
+      <mark className="search-highlight">{match}</mark>
+      {after}
+    </>
+  );
 }
 
 export function TreeNode({
   node,
   depth = 0,
+  expandedCodes,
+  onToggleExpand,
   onDelete,
   onAddChild,
+  searchQuery,
 }: TreeNodeProps) {
   const hasChildren = node.children && node.children.length > 0;
-
-  // Por defecto, mantenemos abiertas las clases principales (depth === 0)
-  const [isExpanded, setIsExpanded] = useState(depth === 0);
-
-  const toggleExpand = () => {
-    if (hasChildren) {
-      setIsExpanded((prev) => !prev);
-    }
-  };
-
+  const isExpanded = expandedCodes.has(node.code);
   const isDebito = node.nature === 'debito';
 
-  // Subcuentas (6 dígitos) no admiten hijos según la regla contable
+  // Solo pueden tener hijas cuentas con menos de 6 dígitos (clase 1, grupo 2, cuenta 4)
   const canHaveChildren = node.code.length < 6;
+
+  const handleRowClick = () => {
+    if (hasChildren) {
+      onToggleExpand(node.code);
+    }
+  };
 
   return (
     <div className="tree-node" style={{ '--depth': depth } as React.CSSProperties}>
       <div
         className={`tree-node-row ${hasChildren ? 'has-children' : 'is-leaf'}`}
-        onClick={toggleExpand}
+        onClick={handleRowClick}
         role={hasChildren ? 'button' : undefined}
         tabIndex={hasChildren ? 0 : undefined}
         onKeyDown={(e) => {
           if (hasChildren && (e.key === 'Enter' || e.key === ' ')) {
             e.preventDefault();
-            toggleExpand();
+            onToggleExpand(node.code);
           }
         }}
         aria-expanded={hasChildren ? isExpanded : undefined}
@@ -71,20 +97,34 @@ export function TreeNode({
         </span>
 
         {/* Código contable */}
-        <span className="tree-node-code">{node.code}</span>
+        <span className="tree-node-code">
+          <HighlightMatch text={node.code} query={searchQuery} />
+        </span>
 
         {/* Nombre descriptivo */}
-        <span className="tree-node-name">{node.name}</span>
+        <span className="tree-node-name">
+          <HighlightMatch text={node.name} query={searchQuery} />
+        </span>
 
-        {/* Badges de Nivel y Naturaleza */}
+        {/* Badges de Nivel y Naturaleza (Fase 6 destacada) */}
         <div className="tree-node-badges">
-          <span className={`badge badge-level level-${node.level}`}>
+          <span
+            className={`badge badge-level level-${node.level}`}
+            title={`Nivel jerárquico: ${node.level} (${node.code.length} ${
+              node.code.length === 1 ? 'dígito' : 'dígitos'
+            })`}
+          >
             {node.level}
           </span>
           <span
             className={`badge badge-nature ${
               isDebito ? 'nature-debito' : 'nature-credito'
             }`}
+            title={
+              isDebito
+                ? 'Naturaleza Débito (saldo normal por el debe)'
+                : 'Naturaleza Crédito (saldo normal por el haber)'
+            }
           >
             {node.nature}
           </span>
@@ -96,8 +136,8 @@ export function TreeNode({
             <button
               type="button"
               className="btn-node-action btn-add-child"
-              title={`Crear subcuenta dependiente de ${node.code}`}
-              onClick={() => onAddChild(node.code)}
+              title={`Crear cuenta hija dependiente de ${node.code} - ${node.name}`}
+              onClick={() => onAddChild(node)}
               aria-label={`Crear subcuenta para ${node.code}`}
             >
               + Hija
@@ -130,8 +170,11 @@ export function TreeNode({
               key={child.code}
               node={child}
               depth={depth + 1}
+              expandedCodes={expandedCodes}
+              onToggleExpand={onToggleExpand}
               onDelete={onDelete}
               onAddChild={onAddChild}
+              searchQuery={searchQuery}
             />
           ))}
         </div>

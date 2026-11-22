@@ -1,18 +1,14 @@
 /**
  * Componente CreateAccountForm — Formulario para registrar una cuenta contable.
  *
- * Fase 4: Frontend crear cuenta.
- *
- * Características:
- *   - Validación en el cliente en tiempo real y al enviar (código numérico, longitud válida, campos requeridos).
- *   - Detección visual y dinámica del nivel jerárquico según la longitud del código.
- *   - Selector de naturaleza condicional (solo visible/requerido para clases de 1 dígito; para los demás niveles se hereda).
- *   - Mapeo específico de errores del servidor (`field: 'code' | 'name' | 'nature'`) directamente bajo el input causante.
- *   - Soporte para prellenar código (útil para la Fase 6 "crear hija desde nodo").
+ * Fases 4 y 6:
+ * - Creación de clases raíz o creación de cuentas hijas desde un nodo padre existente.
+ * - Validación cliente + servidor con mapeo a campos individuales.
+ * - Restricción de prefijo cuando se crea como hija de un padre.
  */
 
 import { useState } from 'react';
-import type { AccountNature } from '../types/account';
+import type { AccountNature, AccountNode } from '../types/account';
 import { createAccount, AccountApiError } from '../services/accountService';
 
 interface CreateAccountFormProps {
@@ -20,8 +16,8 @@ interface CreateAccountFormProps {
   onSuccess: (code: string) => void;
   /** Permite cerrar o cancelar el formulario */
   onCancel?: () => void;
-  /** Código inicial opcional (para crear hijas directamente desde un nodo) */
-  initialCode?: string;
+  /** Cuenta padre opcional desde la que se origina esta nueva cuenta (Fase 6) */
+  parentAccount?: AccountNode | null;
 }
 
 interface FieldErrors {
@@ -47,12 +43,26 @@ function getLevelName(length: number): string | null {
   }
 }
 
+/** Retorna la longitud esperada para el hijo según la longitud del padre */
+function getExpectedChildLength(parentLength: number): number | null {
+  switch (parentLength) {
+    case 1:
+      return 2; // Hijo de Clase (1) es Grupo (2)
+    case 2:
+      return 4; // Hijo de Grupo (2) es Cuenta (4)
+    case 4:
+      return 6; // Hijo de Cuenta (4) es Subcuenta (6)
+    default:
+      return null;
+  }
+}
+
 export function CreateAccountForm({
   onSuccess,
   onCancel,
-  initialCode = '',
+  parentAccount,
 }: CreateAccountFormProps) {
-  const [code, setCode] = useState(initialCode);
+  const [code, setCode] = useState(parentAccount ? parentAccount.code : '');
   const [name, setName] = useState('');
   const [nature, setNature] = useState<AccountNature | ''>('debito');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -60,10 +70,13 @@ export function CreateAccountForm({
   const [generalError, setGeneralError] = useState<string | null>(null);
 
   const cleanCode = code.trim();
-  const isClass = cleanCode.length === 1;
+  const isClass = !parentAccount && cleanCode.length === 1;
   const detectedLevel = getLevelName(cleanCode.length);
+  const expectedChildLength = parentAccount
+    ? getExpectedChildLength(parentAccount.code.length)
+    : null;
 
-  /** Validación en el cliente antes de enviar la petición */
+  /** Validación en el cliente */
   const validateForm = (): boolean => {
     const errors: FieldErrors = {};
 
@@ -74,6 +87,16 @@ export function CreateAccountForm({
       errors.code = 'El código debe contener solo dígitos numéricos.';
     } else if (!VALID_LENGTHS.includes(cleanCode.length)) {
       errors.code = `Longitud inválida (${cleanCode.length} dígitos). Debe tener 1, 2, 4 o 6 dígitos.`;
+    } else if (parentAccount) {
+      // Si se crea como hija, debe comenzar con el código del padre
+      if (!cleanCode.startsWith(parentAccount.code)) {
+        errors.code = `El código debe comenzar con "${parentAccount.code}" (código del padre).`;
+      } else if (
+        expectedChildLength !== null &&
+        cleanCode.length !== expectedChildLength
+      ) {
+        errors.code = `Como hija de ${parentAccount.code} (${parentAccount.level}), debe tener exactamente ${expectedChildLength} dígitos.`;
+      }
     }
 
     // Validar nombre
@@ -81,7 +104,7 @@ export function CreateAccountForm({
       errors.name = 'El nombre es obligatorio.';
     }
 
-    // Validar naturaleza condicional (solo obligatoria en nivel clase)
+    // Validar naturaleza condicional
     if (isClass && !nature) {
       errors.nature = 'La naturaleza es obligatoria para cuentas de nivel clase.';
     }
@@ -106,22 +129,21 @@ export function CreateAccountForm({
         nature: isClass ? (nature as AccountNature) : undefined,
       });
 
-      // Limpiar formulario y notificar éxito
       setCode('');
       setName('');
       setFieldErrors({});
       onSuccess(cleanCode);
     } catch (err) {
       if (err instanceof AccountApiError && err.field) {
-        // Error de negocio específico asignado al input causante
         setFieldErrors((prev) => ({
           ...prev,
           [err.field!]: err.message,
         }));
       } else {
-        // Error general de servidor o de red
         setGeneralError(
-          err instanceof Error ? err.message : 'Error inesperado al crear la cuenta',
+          err instanceof Error
+            ? err.message
+            : 'Error inesperado al crear la cuenta',
         );
       }
     } finally {
@@ -132,7 +154,18 @@ export function CreateAccountForm({
   return (
     <form className="account-form-card" onSubmit={handleSubmit} noValidate>
       <div className="form-header">
-        <h3>Registrar Nueva Cuenta Contable</h3>
+        <div>
+          <h3>
+            {parentAccount
+              ? `Crear Subcuenta para ${parentAccount.code}`
+              : 'Registrar Nueva Cuenta Contable'}
+          </h3>
+          {parentAccount && (
+            <p className="form-header-subtitle">
+              Padre: <strong>{parentAccount.code} - {parentAccount.name}</strong> ({parentAccount.level})
+            </p>
+          )}
+        </div>
         {onCancel && (
           <button
             type="button"
@@ -151,6 +184,19 @@ export function CreateAccountForm({
         </div>
       )}
 
+      {/* Contexto del padre cuando se crea desde nodo */}
+      {parentAccount && (
+        <div className="form-parent-context">
+          <span className="info-icon">↳</span>
+          <div>
+            Creando cuenta dependiente de nivel{' '}
+            <strong>{getLevelName(expectedChildLength ?? 2)}</strong>. Debe tener{' '}
+            <strong>{expectedChildLength} dígitos</strong> y comenzar con{' '}
+            <code>{parentAccount.code}</code>.
+          </div>
+        </div>
+      )}
+
       {/* Campo: Código */}
       <div className="form-group">
         <label htmlFor="account-code">
@@ -161,7 +207,11 @@ export function CreateAccountForm({
             id="account-code"
             type="text"
             inputMode="numeric"
-            placeholder="Ej: 1, 11, 1105 o 110505"
+            placeholder={
+              parentAccount
+                ? `Ej: ${parentAccount.code}${expectedChildLength === 2 ? '1' : '01'}`
+                : 'Ej: 1, 11, 1105 o 110505'
+            }
             value={code}
             onChange={(e) => {
               setCode(e.target.value);
@@ -171,6 +221,7 @@ export function CreateAccountForm({
             }}
             disabled={isSubmitting}
             className={fieldErrors.code ? 'input-error' : ''}
+            autoFocus
           />
           {cleanCode.length > 0 && (
             <span
@@ -188,7 +239,9 @@ export function CreateAccountForm({
           <p className="field-error-msg">{fieldErrors.code}</p>
         ) : (
           <p className="field-hint">
-            Longitudes permitidas: 1 (clase), 2 (grupo), 4 (cuenta), 6 (subcuenta).
+            {parentAccount && expectedChildLength
+              ? `Escribe los dígitos restantes para completar los ${expectedChildLength} dígitos requeridos.`
+              : 'Longitudes permitidas: 1 (clase), 2 (grupo), 4 (cuenta), 6 (subcuenta).'}
           </p>
         )}
       </div>
@@ -250,8 +303,11 @@ export function CreateAccountForm({
         <div className="form-group-info">
           <span className="info-icon">ℹ️</span>
           <span className="info-text">
-            La naturaleza será heredada automáticamente de la clase raíz (código{' '}
-            <strong>{cleanCode[0]}</strong>).
+            Naturaleza:{' '}
+            <strong>
+              {parentAccount ? parentAccount.nature : 'Se heredará de la clase'}
+            </strong>{' '}
+            (heredada automáticamente del ancestro raíz).
           </span>
         </div>
       ) : null}
@@ -269,7 +325,11 @@ export function CreateAccountForm({
           </button>
         )}
         <button type="submit" className="btn-primary" disabled={isSubmitting}>
-          {isSubmitting ? 'Guardando...' : 'Crear Cuenta'}
+          {isSubmitting
+            ? 'Guardando...'
+            : parentAccount
+              ? 'Crear Cuenta Hija'
+              : 'Crear Cuenta'}
         </button>
       </div>
     </form>

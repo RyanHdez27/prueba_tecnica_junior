@@ -1,11 +1,11 @@
 /**
  * Aplicación principal — Catálogo Contable.
  *
- * Fases 3, 4 y 5:
- * - Consulta y visualización del árbol jerárquico.
- * - Registro de nuevas cuentas con validación cliente + servidor.
- * - Eliminación de cuentas con confirmación modal y control de error de dependencias.
- * - Soporte preparado para creación de hijas desde nodo (Fase 6).
+ * Fases 3 a 6:
+ * - Árbol jerárquico interactivo con búsqueda y expandir/colapsar todo.
+ * - Destacado de nivel y naturaleza contable en todo el catálogo.
+ * - Creación de cuentas independientes o creación de hijas directamente desde un nodo.
+ * - Eliminación con confirmación modal y protección contra borrado de cuentas con hijas.
  */
 
 import { useEffect, useState } from 'react';
@@ -20,11 +20,11 @@ export function App() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Control de formulario de creación
+  // Control de formulario de creación y cuenta padre (Fase 6)
   const [showCreateForm, setShowCreateForm] = useState<boolean>(false);
-  const [formInitialCode, setFormInitialCode] = useState<string>('');
+  const [parentForNewChild, setParentForNewChild] = useState<AccountNode | null>(null);
 
-  // Control de modal de eliminación
+  // Control de modal de eliminación (Fase 5)
   const [accountToDelete, setAccountToDelete] = useState<AccountNode | null>(null);
 
   // Mensaje de éxito temporal
@@ -79,9 +79,12 @@ export function App() {
   };
 
   const handleAccountCreated = (newCode: string) => {
-    triggerSuccessAlert(`Cuenta con código "${newCode}" creada exitosamente.`);
+    const parentMsg = parentForNewChild
+      ? ` como subcuenta de "${parentForNewChild.code}"`
+      : '';
+    triggerSuccessAlert(`Cuenta "${newCode}" creada exitosamente${parentMsg}.`);
     setShowCreateForm(false);
-    setFormInitialCode('');
+    setParentForNewChild(null);
     reloadAccounts();
   };
 
@@ -91,10 +94,10 @@ export function App() {
     reloadAccounts();
   };
 
-  const handleAddChildFromNode = (parentCode: string) => {
-    setFormInitialCode(parentCode);
+  /** Inicia el flujo de creación de cuenta hija desde un nodo (Fase 6) */
+  const handleAddChildFromNode = (parent: AccountNode) => {
+    setParentForNewChild(parent);
     setShowCreateForm(true);
-    // Scroll suave hacia el formulario
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -114,9 +117,9 @@ export function App() {
             onClick={() => {
               if (showCreateForm) {
                 setShowCreateForm(false);
-                setFormInitialCode('');
+                setParentForNewChild(null);
               } else {
-                setFormInitialCode('');
+                setParentForNewChild(null);
                 setShowCreateForm(true);
               }
             }}
@@ -144,17 +147,18 @@ export function App() {
       {showCreateForm && (
         <section className="form-section">
           <CreateAccountForm
-            initialCode={formInitialCode}
+            key={parentForNewChild ? parentForNewChild.code : 'root-form'}
+            parentAccount={parentForNewChild}
             onSuccess={handleAccountCreated}
             onCancel={() => {
               setShowCreateForm(false);
-              setFormInitialCode('');
+              setParentForNewChild(null);
             }}
           />
         </section>
       )}
 
-      {/* Árbol jerárquico (Fases 3 y 5) */}
+      {/* Árbol jerárquico (Fases 3, 5 y 6) */}
       <main className="app-main">
         <AccountTree
           accounts={accounts}

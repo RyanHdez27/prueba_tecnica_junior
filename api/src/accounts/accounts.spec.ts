@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { HttpException, HttpStatus } from '@nestjs/common';
 import { Account } from '../domain/entities/account.entity.js';
 import type { AccountRepository } from '../domain/repositories/account.repository.js';
 import { CreateAccountUseCase } from '../application/use-cases/create-account.use-case.js';
 import { GetCatalogTreeUseCase } from '../application/use-cases/get-catalog-tree.use-case.js';
 import { DeleteAccountUseCase } from '../application/use-cases/delete-account.use-case.js';
+import { AccountsController } from './accounts.controller.js';
 import {
   InvalidAccountCodeError,
   AccountAlreadyExistsError,
@@ -41,6 +43,47 @@ class MockAccountRepository implements AccountRepository {
     return false;
   }
 }
+
+describe('Entidad de Dominio Account', () => {
+  it('debe validar códigos permitidos de 1, 2, 4 y 6 dígitos', () => {
+    expect(Account.isValidCode('1')).toBe(true);
+    expect(Account.isValidCode('11')).toBe(true);
+    expect(Account.isValidCode('1105')).toBe(true);
+    expect(Account.isValidCode('110505')).toBe(true);
+
+    expect(Account.isValidCode('')).toBe(false);
+    expect(Account.isValidCode('123')).toBe(false);
+    expect(Account.isValidCode('12345')).toBe(false);
+    expect(Account.isValidCode('11050501')).toBe(false);
+    expect(Account.isValidCode('11A5')).toBe(false);
+  });
+
+  it('debe calcular correctamente el nivel jerárquico según la longitud', () => {
+    const clase = new Account('1', 'Activo', 'debito');
+    const grupo = new Account('11', 'Disponible', 'debito');
+    const cuenta = new Account('1105', 'Caja', 'debito');
+    const subcuenta = new Account('110505', 'Caja General', 'debito');
+
+    expect(clase.level).toBe('clase');
+    expect(grupo.level).toBe('grupo');
+    expect(cuenta.level).toBe('cuenta');
+    expect(subcuenta.level).toBe('subcuenta');
+    expect(clase.isClass).toBe(true);
+    expect(grupo.isClass).toBe(false);
+  });
+
+  it('debe calcular el código del padre exacto', () => {
+    const subcuenta = new Account('110505', 'Caja General', 'debito');
+    const cuenta = new Account('1105', 'Caja', 'debito');
+    const grupo = new Account('11', 'Disponible', 'debito');
+    const clase = new Account('1', 'Activo', 'debito');
+
+    expect(subcuenta.getParentCode()).toBe('1105');
+    expect(cuenta.getParentCode()).toBe('11');
+    expect(grupo.getParentCode()).toBe('1');
+    expect(clase.getParentCode()).toBeNull();
+  });
+});
 
 describe('Casos de uso de Cuentas Contables', () => {
   let repo: MockAccountRepository;
@@ -121,6 +164,11 @@ describe('Casos de uso de Cuentas Contables', () => {
       expect(tree[0].children[0].children[0].code).toBe('1105');
       expect(tree[0].children[0].children[0].children[0].code).toBe('110505');
     });
+
+    it('debe retornar un array vacío si no hay cuentas', () => {
+      const tree = treeUseCase.execute();
+      expect(tree).toEqual([]);
+    });
   });
 
   describe('DeleteAccountUseCase', () => {
@@ -142,9 +190,63 @@ describe('Casos de uso de Cuentas Contables', () => {
       deleteUseCase.execute('11');
       expect(repo.findByCode('11')).toBeNull();
 
-      // Ahora que no tiene hijas, se puede eliminar la clase raíz
       deleteUseCase.execute('1');
       expect(repo.findByCode('1')).toBeNull();
     });
+  });
+});
+
+describe('AccountsController (Unit)', () => {
+  let controller: AccountsController;
+  let repo: MockAccountRepository;
+
+  beforeEach(() => {
+    repo = new MockAccountRepository();
+    const createUseCase = new CreateAccountUseCase(repo);
+    const treeUseCase = new GetCatalogTreeUseCase(repo);
+    const deleteUseCase = new DeleteAccountUseCase(repo);
+    controller = new AccountsController(createUseCase, treeUseCase, deleteUseCase);
+  });
+
+  it('debe retornar 201 y la cuenta formateada al crear exitosamente', () => {
+    const result = controller.create({
+      code: '1',
+      name: 'Activo',
+      nature: 'debito',
+    });
+
+    expect(result).toEqual({
+      code: '1',
+      name: 'Activo',
+      nature: 'debito',
+      level: 'clase',
+    });
+  });
+
+  it('debe mapear ParentNotFoundError a HttpException con status 400 y field "code"', () => {
+    try {
+      controller.create({ code: '11', name: 'Disponible' });
+      expect.fail('Debió lanzar error');
+    } catch (err) {
+      expect(err).toBeInstanceOf(HttpException);
+      const httpErr = err as HttpException;
+      expect(httpErr.getStatus()).toBe(HttpStatus.BAD_REQUEST);
+      const response = httpErr.getResponse() as Record<string, unknown>;
+      expect(response.field).toBe('code');
+    }
+  });
+
+  it('debe mapear AccountHasChildrenError a HttpException con status 409', () => {
+    controller.create({ code: '1', name: 'Activo', nature: 'debito' });
+    controller.create({ code: '11', name: 'Disponible' });
+
+    try {
+      controller.remove('1');
+      expect.fail('Debió lanzar error');
+    } catch (err) {
+      expect(err).toBeInstanceOf(HttpException);
+      const httpErr = err as HttpException;
+      expect(httpErr.getStatus()).toBe(HttpStatus.CONFLICT);
+    }
   });
 });
